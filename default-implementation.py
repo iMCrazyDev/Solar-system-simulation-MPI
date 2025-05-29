@@ -29,22 +29,22 @@ focused_body = None
 # Create planetary bodies
 for name, mass, radius, distance, speed, col, inc in planet_data:
     inc_rad = radians(inc)
-    pos = vector(distance / scale * cos(inc_rad),
-                 distance / scale * sin(inc_rad), 0)
+    pos = vector(distance * cos(inc_rad), distance * sin(inc_rad), 0)
     vel = vector(-speed * sin(inc_rad), speed * cos(inc_rad), 0)
 
-    body = sphere(pos=pos, radius=radius * 8 / scale,
+    body = sphere(pos=pos / scale, radius=radius * 8 / scale,
                   color=col, make_trail=True, trail_color=col, retain=300)
     body.mass = mass
     body.velocity = vel
+    body.real_pos = pos
     body.name = name
+    body.acc = vector(0, 0, 0)  # for leapfrog
     bodies.append(body)
 
 # Set total system momentum to zero
 total_momentum = sum((b.mass * b.velocity for b in bodies[1:]), vector(0, 0, 0))
 bodies[0].velocity = -total_momentum / bodies[0].mass
 
-# Camera control keys
 planet_keys = {'0': 'Sun', '1': 'Mercury', '2': 'Venus', '3': 'Earth',
                '4': 'Mars', '5': 'Jupiter', '6': 'Saturn',
                '7': 'Uranus', '8': 'Neptune'}
@@ -68,11 +68,9 @@ def key_input(evt):
 
 scene.bind('keydown', key_input)
 
-# Convert color vector to hex string for UI labels
 def to_hex(c):
     return '#{:02x}{:02x}{:02x}'.format(int(c.x * 255), int(c.y * 255), int(c.z * 255))
 
-# UI for adjusting planetary masses
 initial_masses = {b.name: b.mass for b in bodies}
 mass_labels = {}
 
@@ -88,7 +86,6 @@ for b in bodies:
     slider(min=0.1, max=100.0, value=1.0, length=200, bind=make_slider(b), right=15)
     mass_labels[b.name] = wtext(text=f"{b.mass:.2e} kg\n")
 
-# Simulation speed control
 sim_speed = {'value': 300}
 wtext(text="\nSimulation speed:\n")
 def update_rate(s):
@@ -97,84 +94,92 @@ def update_rate(s):
 slider(min=10, max=1000, value=300, length=300, step=10, bind=update_rate, right=15)
 rate_label = wtext(text=f"Rate: {sim_speed['value']} steps/sec\n")
 
-# Rocket speed display
 wtext(text="\nRocket speed:\n")
 rocket_speed_text = wtext(text="0.00 km/s")
 
-# Elapsed simulation time display
 wtext(text="\nElapsed time:\n")
 time_elapsed_text = wtext(text="0 d 00:00")
 
-# Rocket initialization
 earth = next(b for b in bodies if b.name == "Earth")
-rocket = sphere(pos=earth.pos + vector(1e7 / scale, 0, 0), radius=5e6 / scale,
+rocket_pos = earth.real_pos + vector(1e7, 0, 0)
+rocket = sphere(pos=rocket_pos / scale, radius=5e6 / scale,
                 color=color.green, make_trail=True, retain=500)
 rocket.mass = 5e5
 rocket.initial_mass = 5e5
 rocket.dry_mass = 1e5
 rocket.velocity = earth.velocity
+rocket.real_pos = rocket_pos
+rocket.acc = vector(0, 0, 0)  # for leapfrog
 
-# Rocket flight plan with thrust phases
 flight_plan = [
-    {
-        "start_time": 60 * 60 * 24,
-        "duration":   60 * 60 * 6,
-        "acceleration": vector(0.1, -1, 0)
-    },
-    {
-        "start_time": 60 * 60 * 72,
-        "duration":   60 * 60 * 4,
-        "acceleration": vector(0.0003, 0.0002, 0)
-    }
+    {"start_time": 60 * 60 * 24, "duration": 60 * 60 * 6, "acceleration": vector(0.1, -1, 0)},
+    {"start_time": 60 * 60 * 72, "duration": 60 * 60 * 4, "acceleration": vector(0.0003, 0.0002, 0)}
 ]
 
 flight_index = 0
-step = 0
 time_passed = 0
 
-# Main simulation loop
+# Initial acceleration for leapfrog
+all_bodies = bodies + [rocket]
+for i, bi in enumerate(all_bodies):
+    total_force = vector(0, 0, 0)
+    for j, bj in enumerate(all_bodies):
+        if i != j:
+            r = bj.real_pos - bi.real_pos
+            total_force += G * bi.mass * bj.mass * norm(r) / mag2(r)
+    bi.acc = total_force / bi.mass
+
 while True:
     rate(sim_speed['value'])
     time_passed += dt
 
     all_bodies = bodies + [rocket]
-    forces = [vector(0, 0, 0) for _ in all_bodies]
 
+    # Leapfrog: velocity half step
+    for b in all_bodies:
+        b.velocity += 0.5 * b.acc * dt
+
+    # Full position update
+    for b in all_bodies:
+        b.real_pos += b.velocity * dt
+        b.pos = b.real_pos / scale
+
+    # Compute new accelerations
+    new_accs = []
     for i, bi in enumerate(all_bodies):
+        total_force = vector(0, 0, 0)
         for j, bj in enumerate(all_bodies):
-            if i == j:
-                continue
-            r_vec = bj.pos - bi.pos
-            r_mag = mag(r_vec)
-            r_hat = norm(r_vec)
-            f = G * bi.mass * bj.mass / (r_mag * scale)**2
-            forces[i] += f * r_hat
+            if i != j:
+                r = bj.real_pos - bi.real_pos
+                total_force += G * bi.mass * bj.mass * norm(r) / mag2(r)
+        new_accs.append(total_force / bi.mass)
 
-    for i, b in enumerate(bodies):
-        acc = forces[i] / b.mass
-        b.velocity += acc * dt
-        b.pos += b.velocity * dt / scale
+    # Leapfrog: velocity second half step
+    for b, a_new in zip(all_bodies, new_accs):
+        b.velocity += 0.5 * a_new * dt
+        b.acc = a_new
 
-    rocket_acc = forces[-1] / rocket.mass
+    # Rocket thrust logic
+    rocket_acc_extra = vector(0, 0, 0)
     if flight_index < len(flight_plan):
         phase = flight_plan[flight_index]
         t0 = phase["start_time"]
         dur = phase["duration"]
         acc_vec = phase["acceleration"]
         if t0 <= time_passed < t0 + dur:
-            rocket_acc += acc_vec
+            rocket_acc_extra += acc_vec
             burn_rate = (rocket.initial_mass - rocket.dry_mass) / dur
             rocket.mass = max(rocket.mass - burn_rate * dt, rocket.dry_mass)
         elif time_passed >= t0 + dur:
             flight_index += 1
 
-    rocket.velocity += rocket_acc * dt
-    rocket.pos += rocket.velocity * dt / scale
+    # Apply rocket thrust directly to velocity
+    rocket.velocity += rocket_acc_extra * dt
 
     if focused_body:
         direction = norm(vector(-1, -1, -0.5))
-        scene.camera.pos = focused_body.pos + direction * camera_distance
-        scene.camera.axis = focused_body.pos - scene.camera.pos
+        scene.camera.pos = focused_body.real_pos / scale + direction * camera_distance
+        scene.camera.axis = (focused_body.real_pos / scale) - scene.camera.pos
 
     rocket_speed = mag(rocket.velocity) / 1000
     rocket_speed_text.text = f"{rocket_speed:.2f} km/s"
