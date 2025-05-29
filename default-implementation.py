@@ -1,190 +1,109 @@
+# Modified Solar System Simulation with simulation-time display
 from vpython import *
 from math import sin, cos, radians
+import threading, time
 
-G = 6.67430e-11
-dt = 60 * 60 * 2  # 2 hours per simulation step
-scale = 1e9
-camera_distance = 4.5e11 / scale
+G           = 6.67430e-11
+DT          = 60 * 2          # 2-минутный физический шаг
+RENDER_FPS  = 60              # частота отрисовки
+SCALE       = 1e9
+CAMERA_DIST = 4.5e11 / SCALE
 
 planet_data = [
-    ("Sun",     1.989e30, 7e8,    0,        0,     color.white,    0.0),
-    ("Mercury", 3.30e23,  2.44e6, 5.79e10,  47400, color.gray(0.5), 7.0),
-    ("Venus",   4.87e24,  6.05e6, 1.08e11,  35000, color.orange,    3.39),
-    ("Earth",   5.97e24,  6.37e6, 1.50e11,  29780, color.blue,      0.0),
-    ("Mars",    6.42e23,  3.39e6, 2.28e11,  24070, color.red,       1.85),
-    ("Jupiter", 1.90e27,  6.99e7, 7.78e11,  13070, color.orange,    1.30),
-    ("Saturn",  5.68e26,  5.82e7, 1.43e12,   9700, color.yellow,    2.49),
-    ("Uranus",  8.68e25,  2.54e7, 2.87e12,   6800, color.cyan,      0.77),
-    ("Neptune", 1.02e26,  2.46e7, 4.50e12,   5400, color.blue,      1.77),
+    ("Sun",     1.989e30, 7e8,    0,        0,        color.white,    0.0),
+    ("Mercury", 3.30e23,  2.44e6, 5.79e10,  47400,    color.gray(0.5), 7.0),
+    ("Venus",   4.87e24,  6.05e6, 1.08e11,  35000,    color.orange,    3.39),
+    ("Earth",   5.97e24,  6.37e6, 1.50e11,  29780,    color.blue,      0.0),
+    ("Mars",    6.42e23,  3.39e6, 2.28e11,  24070,    color.red,       1.85),
+    ("Jupiter", 1.90e27,  6.99e7, 7.78e11,  13070,    color.orange,    1.30),
+    ("Saturn",  5.68e26,  5.82e7, 1.43e12,   9700,    color.yellow,    2.49),
+    ("Uranus",  8.68e25,  2.54e7, 2.87e12,   6800,    color.cyan,      0.77),
+    ("Neptune", 1.02e26,  2.46e7, 4.50e12,   5400,    color.blue,      1.77),
 ]
 
-scene.title = "Solar System with Rocket Simulation"
+scene.title   = "Solar System Simulation"
 scene.forward = vector(-1, -0.3, -1)
-scene.range = 1e12 / scale
-scene.center = vector(0, 0, 0)
+scene.range   = 1e12 / SCALE
+scene.center  = vector(0, 0, 0)
 
 bodies = []
-focused_body = None
+for name, mass, rad, a, v, col, inc in planet_data:
+    inc = radians(inc)
+    pos = vector(a * cos(inc), a * sin(inc), 0)
+    vel = vector(-v * sin(inc), v * cos(inc), 0)
 
-# Create planetary bodies
-for name, mass, radius, distance, speed, col, inc in planet_data:
-    inc_rad = radians(inc)
-    pos = vector(distance * cos(inc_rad), distance * sin(inc_rad), 0)
-    vel = vector(-speed * sin(inc_rad), speed * cos(inc_rad), 0)
+    s = sphere(pos=pos/SCALE, radius=rad*8/SCALE,
+               color=col, make_trail=True, trail_color=col, retain=300)
+    s.name      = name
+    s.mass      = mass
+    s.real_pos  = pos
+    s.velocity  = vel
+    s.acc       = vector(0, 0, 0)
+    bodies.append(s)
 
-    body = sphere(pos=pos / scale, radius=radius * 8 / scale,
-                  color=col, make_trail=True, trail_color=col, retain=300)
-    body.mass = mass
-    body.velocity = vel
-    body.real_pos = pos
-    body.name = name
-    body.acc = vector(0, 0, 0)  # for leapfrog
-    bodies.append(body)
+total_p = sum((b.mass*b.velocity for b in bodies[1:]), vector(0,0,0))
+bodies[0].velocity = -total_p / bodies[0].mass
 
-# Set total system momentum to zero
-total_momentum = sum((b.mass * b.velocity for b in bodies[1:]), vector(0, 0, 0))
-bodies[0].velocity = -total_momentum / bodies[0].mass
+shared_state = {
+    "positions":  [b.real_pos for b in bodies],
+    "velocities": [b.velocity  for b in bodies],
+    "phys_fps":   0.0,
+    "sim_time":   0.0    
+}
 
-planet_keys = {'0': 'Sun', '1': 'Mercury', '2': 'Venus', '3': 'Earth',
-               '4': 'Mars', '5': 'Jupiter', '6': 'Saturn',
-               '7': 'Uranus', '8': 'Neptune'}
-
-def set_focus(obj):
-    global focused_body
-    focused_body = obj
-    print(f"Focusing on: {obj.name}")
-
-def key_input(evt):
-    global focused_body
-    key = evt.key
-    if key in planet_keys:
-        name = planet_keys[key]
-        for b in bodies:
-            if b.name == name:
-                set_focus(b)
-                break
-    elif key == '9':
-        focused_body = None
-
-scene.bind('keydown', key_input)
-
-def to_hex(c):
-    return '#{:02x}{:02x}{:02x}'.format(int(c.x * 255), int(c.y * 255), int(c.z * 255))
-
-initial_masses = {b.name: b.mass for b in bodies}
-mass_labels = {}
-
-wtext(text="\nMass settings:\n")
-for b in bodies:
-    color_hex = to_hex(b.color)
-    wtext(text=f"<font color='{color_hex}'>{b.name}</font>: ")
-    def make_slider(body):
-        def update(s):
-            body.mass = s.value * initial_masses[body.name]
-            mass_labels[body.name].text = f"{body.mass:.2e} kg\n"
-        return update
-    slider(min=0.1, max=100.0, value=1.0, length=200, bind=make_slider(b), right=15)
-    mass_labels[b.name] = wtext(text=f"{b.mass:.2e} kg\n")
-
-sim_speed = {'value': 300}
-wtext(text="\nSimulation speed:\n")
-def update_rate(s):
-    sim_speed['value'] = int(s.value)
-    rate_label.text = f"Rate: {int(s.value)} steps/sec\n"
-slider(min=10, max=1000, value=300, length=300, step=10, bind=update_rate, right=15)
-rate_label = wtext(text=f"Rate: {sim_speed['value']} steps/sec\n")
-
-wtext(text="\nRocket speed:\n")
-rocket_speed_text = wtext(text="0.00 km/s")
-
-wtext(text="\nElapsed time:\n")
-time_elapsed_text = wtext(text="0 d 00:00")
-
-earth = next(b for b in bodies if b.name == "Earth")
-rocket_pos = earth.real_pos + vector(1e7, 0, 0)
-rocket = sphere(pos=rocket_pos / scale, radius=5e6 / scale,
-                color=color.green, make_trail=True, retain=500)
-rocket.mass = 5e5
-rocket.initial_mass = 5e5
-rocket.dry_mass = 1e5
-rocket.velocity = earth.velocity
-rocket.real_pos = rocket_pos
-rocket.acc = vector(0, 0, 0)  # for leapfrog
-
-flight_plan = [
-    {"start_time": 60 * 60 * 24, "duration": 60 * 60 * 6, "acceleration": vector(0.1, -1, 0)},
-    {"start_time": 60 * 60 * 72, "duration": 60 * 60 * 4, "acceleration": vector(0.0003, 0.0002, 0)}
-]
-
-flight_index = 0
-time_passed = 0
-
-# Initial acceleration for leapfrog
-all_bodies = bodies + [rocket]
-for i, bi in enumerate(all_bodies):
-    total_force = vector(0, 0, 0)
-    for j, bj in enumerate(all_bodies):
-        if i != j:
+def physics_thread():
+    for i, bi in enumerate(bodies):
+        F = vector(0,0,0)
+        for j, bj in enumerate(bodies):
+            if i == j: continue
             r = bj.real_pos - bi.real_pos
-            total_force += G * bi.mass * bj.mass * norm(r) / mag2(r)
-    bi.acc = total_force / bi.mass
+            F += G * bi.mass * bj.mass * norm(r) / mag2(r)
+        bi.acc = F / bi.mass
+
+    steps, t_mark = 0, time.time()
+    sim_time = 0.0
+    while True:
+        for b in bodies:
+            b.velocity += 0.5 * b.acc * DT
+        for b in bodies:
+            b.real_pos += b.velocity * DT
+
+        for i, bi in enumerate(bodies):
+            F = vector(0,0,0)
+            for j, bj in enumerate(bodies):
+                if i == j: continue
+                r = bj.real_pos - bi.real_pos
+                F += G * bi.mass * bj.mass * norm(r) / mag2(r)
+            bi.acc = F / bi.mass
+        for b in bodies:
+            b.velocity += 0.5 * b.acc * DT
+
+        shared_state["positions"]  = [b.real_pos for b in bodies]
+        shared_state["velocities"] = [b.velocity  for b in bodies]
+
+        sim_time += DT
+        shared_state["sim_time"] = sim_time
+
+        steps += 1
+        now = time.time()
+        if now - t_mark >= 1.0:
+            shared_state["phys_fps"] = steps / (now - t_mark)
+            steps, t_mark = 0, now
+
+threading.Thread(target=physics_thread, daemon=True).start()
+
+fps_label  = wtext(text="Physics FPS: 0.0\n")
+time_label = wtext(text="Simulation time: 0.0 days\n")
 
 while True:
-    rate(sim_speed['value'])
-    time_passed += dt
+    rate(RENDER_FPS)
+    for body, pos in zip(bodies, shared_state["positions"]):
+        body.pos = pos / SCALE
 
-    all_bodies = bodies + [rocket]
+    fps_label.text  = f"Physics FPS: {shared_state['phys_fps']:.1f}\n"
+    days = shared_state["sim_time"] / 86400.0
+    time_label.text = f"Simulation time: {days:.2f} days\n"
 
-    # Leapfrog: velocity half step
-    for b in all_bodies:
-        b.velocity += 0.5 * b.acc * dt
-
-    # Full position update
-    for b in all_bodies:
-        b.real_pos += b.velocity * dt
-        b.pos = b.real_pos / scale
-
-    # Compute new accelerations
-    new_accs = []
-    for i, bi in enumerate(all_bodies):
-        total_force = vector(0, 0, 0)
-        for j, bj in enumerate(all_bodies):
-            if i != j:
-                r = bj.real_pos - bi.real_pos
-                total_force += G * bi.mass * bj.mass * norm(r) / mag2(r)
-        new_accs.append(total_force / bi.mass)
-
-    # Leapfrog: velocity second half step
-    for b, a_new in zip(all_bodies, new_accs):
-        b.velocity += 0.5 * a_new * dt
-        b.acc = a_new
-
-    # Rocket thrust logic
-    rocket_acc_extra = vector(0, 0, 0)
-    if flight_index < len(flight_plan):
-        phase = flight_plan[flight_index]
-        t0 = phase["start_time"]
-        dur = phase["duration"]
-        acc_vec = phase["acceleration"]
-        if t0 <= time_passed < t0 + dur:
-            rocket_acc_extra += acc_vec
-            burn_rate = (rocket.initial_mass - rocket.dry_mass) / dur
-            rocket.mass = max(rocket.mass - burn_rate * dt, rocket.dry_mass)
-        elif time_passed >= t0 + dur:
-            flight_index += 1
-
-    # Apply rocket thrust directly to velocity
-    rocket.velocity += rocket_acc_extra * dt
-
-    if focused_body:
-        direction = norm(vector(-1, -1, -0.5))
-        scene.camera.pos = focused_body.real_pos / scale + direction * camera_distance
-        scene.camera.axis = (focused_body.real_pos / scale) - scene.camera.pos
-
-    rocket_speed = mag(rocket.velocity) / 1000
-    rocket_speed_text.text = f"{rocket_speed:.2f} km/s"
-
-    days = int(time_passed // (60 * 60 * 24))
-    hours = int((time_passed % (60 * 60 * 24)) // 3600)
-    minutes = int((time_passed % 3600) // 60)
-    time_elapsed_text.text = f"{days} d {hours:02}:{minutes:02}"
+    if scene.camera.follow is None:
+        scene.camera.pos  = vector(0, 0, CAMERA_DIST / SCALE)
+        scene.camera.axis = vector(0, 0, -CAMERA_DIST / SCALE)
