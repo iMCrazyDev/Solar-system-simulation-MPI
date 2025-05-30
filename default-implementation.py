@@ -1,4 +1,3 @@
-# Modified Solar System Simulation with simulation-time display
 from vpython import *
 from math import sin, cos, radians
 import threading, time

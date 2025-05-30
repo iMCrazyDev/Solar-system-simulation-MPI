@@ -3,7 +3,6 @@ import argparse, time
 from math import radians, cos, sin
 import numpy as np
 
-# ───────────────────────── CLI ─────────────────────────
 parser = argparse.ArgumentParser(description="Single-threaded N-body benchmark (no GUI)")
 parser.add_argument("--warmup", type=float, default=10.0,
                     help="Warmup duration in seconds before measurement (default 10)")
@@ -13,11 +12,9 @@ args = parser.parse_args()
 WARMUP_SECS = args.warmup
 BENCH_SECS  = args.secs
 
-# ────────────────── constants ──────────────────
-G  = 6.67430e-11  # m³·kg⁻¹·s⁻²
-DT = 60 * 2       # физический шаг: 2 минуты реального времени модели
+G  = 6.67430e-11
+DT = 60 * 2       
 
-# planet_data: name, mass, radius, a (m), v (m/s), color, inc (°)
 planet_data = [
     ("Sun", 1.989e+30, 7.00e+08, 0.00e+00, 0.0, None, 0.0),
     ("Gamma-1", 2.612e+27, 1.38e+11, 8.67e+12, 32631.42, None, 44.44),
@@ -536,17 +533,13 @@ def init_bodies():
         masses[i]     = m
         positions[i]  = (a*cos(inc_rad), a*sin(inc_rad), 0.0)
         velocities[i] = (-v*sin(inc_rad), v*cos(inc_rad), 0.0)
-    # center-of-mass to keep Sun near origin
     vel_cm = np.sum(masses[:,None] * velocities, axis=0) / masses.sum()
     velocities[:] -= vel_cm
 
-# single physics step (Velocity-Verlet)
 def physics_step():
     global positions, velocities, forces
-    # first half-kick + drift
     velocities += 0.5 * (forces / masses[:,None]) * DT
     positions  += velocities * DT
-    # compute forces
     forces.fill(0.0)
     for i in range(N):
         rij = positions - positions[i]
@@ -556,18 +549,14 @@ def physics_step():
         inv_r3[mask] = 1.0 / np.power(dist2[mask], 1.5)
         coeff = G * masses[i] * masses * inv_r3
         forces[i] = np.sum(rij * coeff[:,None], axis=0)
-    # second half-kick
     velocities += 0.5 * (forces / masses[:,None]) * DT
 
-# main benchmark
 if __name__ == '__main__':
     init_bodies()
-    # warmup
     t_warm = time.time() + WARMUP_SECS
     while time.time() < t_warm:
         physics_step()
     print(f"Warmup complete ({WARMUP_SECS}s). Starting measurement ({BENCH_SECS}s)...")
-    # measure
     fps_samples = []
     t_end = time.time() + BENCH_SECS
     while time.time() < t_end:
@@ -576,7 +565,6 @@ if __name__ == '__main__':
         dt = time.time() - t0
         if dt > 0:
             fps_samples.append(1.0/dt)
-    # results
     samples = np.array(fps_samples)
     samples.sort()
     n = samples.size

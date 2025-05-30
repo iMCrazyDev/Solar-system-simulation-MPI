@@ -9,9 +9,9 @@ rank  = comm.Get_rank()
 size  = comm.Get_size()
 
 G          = 6.67430e-11
-DT         = 60 * 2          # физический шаг, 2 минуты
+DT         = 60 * 2          
 SCALE      = 1e9
-RENDER_FPS = 60              # кадров/с GUI
+RENDER_FPS = 60              
 
 planet_data = [
     ("Sun",     1.989e30, 7.00e8,  0.00e0,   0,       (1,1,1),     0.00),
@@ -26,7 +26,6 @@ planet_data = [
 ]
 N = len(planet_data)
 
-# ────────────────── arrays ──────────────────
 masses     = np.empty(N)
 positions  = np.empty((N, 3))
 velocities = np.empty((N, 3))
@@ -96,7 +95,6 @@ def physics_loop():
 
         loop_dt = time.time() - loop_t0
 
-        # ── rank 0: FPS bookkeeping ──
         if rank == 0:
             fps = 1.0 / loop_dt if loop_dt > 0 else 0.0
             fps_samples.append(fps)

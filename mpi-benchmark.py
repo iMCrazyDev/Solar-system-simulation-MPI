@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Solar‑system N‑body — **MPI benchmark, one‑line result**
-───────────────────────────────────────────────────────
-• Прогрев `--warmup` (default 10 s)
-• Измерение `--secs` (default 30 s)
-• **Единичный** агрегированный вывод (rank 0) после измерения.
-
-Запуск:
-    mpiexec -n 8 python solar_mpi_bench.py --warmup 10 --secs 30
-"""
 from __future__ import annotations
 import argparse, time
 from math import radians, sin, cos
@@ -64,12 +54,10 @@ start_time = MPI.Wtime()
 warm_end   = start_time + WARMUP
 bench_end  = warm_end + BENCH
 
-# warm‑up
 while MPI.Wtime() < warm_end:
     step()
 
-# measurement: collect FPS every 0.1 s → O(secs/0.1) samples, small memory
-sample_dt = 0.1  # seconds between FPS samples
+sample_dt = 0.1
 steps, tmark = 0, MPI.Wtime()
 local_fps = []
 while MPI.Wtime() < bench_end:
